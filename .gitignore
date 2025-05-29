@@ -1,0 +1,212 @@
+# Environment variables
+.env
+.env.local
+.env.production
+.env.staging
+.env.test
+docker.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# PyCharm
+.idea/
+
+# Spyder
+.spyderproject
+.spyproject
+
+# Rope
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# Database files
+# *.db
+# *.sqlite
+# *.sqlite3
+
+# Logs
+*.log
+logs/
+log/
+
+# FastAPI specific
+.pytest_cache/
+
+# Docker
+docker-compose.override.yml
+.dockerignore
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# Node.js (if you have any frontend components)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# Backup files
+*.bak
+*.tmp
+*.temp
+
+# SSL certificates (keep the provided one in repo if needed)
+*.pem
+*.key
+*.crt
+!isrgrootx1.pem
+
+# Model files and large data (uncomment if you don't want to track them)
+# *.pkl
+# *.joblib
+# *.h5
+# *.hdf5
+# models/
+# embeddings/
+
+# Vector database files (if local)
+# qdrant_storage/
+# chroma_db/
+
+# Temporary files
+temp/
+tmp/
+.tmp/
+
+# Configuration backups
+config.backup
+settings.backup
+
+# Test artifacts
+.pytest_cache/
+test-results/
+test-reports/
+
+# Documentation build
+docs/_build/
+
+# Local development
+.local/
+local_settings.py
+
+# Elastic search data
+elasticsearch/
+
+# Redis dump
+dump.rdb
+
+# MongoDB data
+mongodb_data/
+
+# Secrets and keys
+secrets/
+keys/
+credentials/
