@@ -1,4 +1,5 @@
-from .resources import QueryOutput, State, llm, db, vectorstore
+from .states import QueryOutput, State
+from ..factories.models import llm, db, vectorstore
 from .prompts import router_prompt, sql_prompt, vectordb_prompt
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage 
 from langchain_community.tools.sql_database.tool import QuerySQLDatabaseTool
@@ -8,38 +9,26 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.retrievers import EnsembleRetriever
 from langchain_community.retrievers import BM25Retriever
 from langgraph.graph import START, StateGraph, END
+from ..services.memory_service import memory_service
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def get_last_n_conversations(questions, answers, n=7):
-    """Helper function to get last n conversations (Q&A pairs)"""
-    if not questions or not answers:
-        return [], []
-    
-    # Get the minimum length to avoid index errors
-    min_len = min(len(questions), len(answers))
-    
-    # If we have fewer than n conversations, return all
-    if min_len <= n:
-        return list(questions[:min_len]), list(answers[:min_len])
-    
-    # Return last n conversations
-    return list(questions[-n:]), list(answers[-n:])
 
 def router(state: State):
-    question = state["question"]    
-    answer = state["answer"]
-
-    # Only use last 7 conversations for context
-    last_questions, last_answers = get_last_n_conversations(question, answer, 7)
+    """Route the conversation based on the latest user message."""
+    print("Routing decision...")
+    messages = state["messages"]
     
-    response = llm.invoke(router_prompt.format(
-        question=last_questions[-1] if last_questions else question, 
-        questions=last_questions, 
-        answer=last_answers
-    ))
+    # Get the latest user message
+    latest_message = messages[-1].content if messages else ""
+    
+    recent_messages = messages[-8:] if len(messages) > 8 else messages
+
+    response = llm.invoke(router_prompt.format(question=latest_message, context=recent_messages))
     answer = response.content.strip().lower()
     print(f"Router Decision (LLM): {answer}")
-    # print(question)
 
     if "sql" in answer:
         return {"route": "sql"}
@@ -50,18 +39,24 @@ def router(state: State):
 
 def write_query(state: State):
     """Generate SQL query to fetch information with context awareness."""
-    # Get only last 5 conversations for context
-    messages = state["question"]
-    answer = state["answer"]
+    messages = state["messages"]
     
-    last_questions, last_answers = get_last_n_conversations(messages, answer, 5)
+    # Get the latest user message for the query
+    latest_message = messages[-1].content if messages else ""
     
+    # Build context from recent conversation
+    context_messages = []
+    for msg in messages[-8:]:  # Last 3 exchanges (6 messages)
+        if isinstance(msg, (HumanMessage, AIMessage)):
+            context_messages.append(f"{msg.__class__.__name__}: {msg.content}")
+    
+    context_str = "\n".join(context_messages) if context_messages else latest_message
+        
     prompt = sql_prompt.format(
         dialect=db.dialect,
         top_k=10,
-        table_info=db.get_table_info(),
-        answer=last_answers,
-        input=last_questions,
+        table_info=db.get_context(),
+        input=context_str,
     )    
     structured_llm = llm.with_structured_output(QueryOutput)
     result = structured_llm.invoke(prompt)
@@ -69,69 +64,69 @@ def write_query(state: State):
 
 def execute_query(state: State):
     """Execute SQL query."""
+    query = state["query"]
+    
+    # Execute query - Redis cache will handle LLM response caching automatically
     execute_query_tool = QuerySQLDatabaseTool(db=db)
-    return {"result": execute_query_tool.invoke(state["query"])}
+    result = execute_query_tool.invoke(query)
+    
+    return {"result": result}
 
 def generate_sql_answer(state: State):
-    """Answer question using retrieved information with previous context (last 5 only)."""
-    # Get current question
-    messages = state["question"]
-    current_question = messages[-1].content if messages else ""
+    """Generate SQL answer with conversation context."""
+    messages = state["messages"]
+    latest_message = messages[-1].content if messages else ""
+    thread_id = state.get("thread_id", "")
     
-    # Build context from last 5 Q&A pairs only
-    context_messages = []
-    context_messages.append(SystemMessage(content="You are an AI assistant. Answer the current question based on the given SQL query and its result."))
+    # Get recent conversation context
+    recent_messages = messages[-6:] if len(messages) > 6 else messages
     
-    # Include only last 5 previous questions and answers as context if available
-    if len(messages) > 1 and "answer" in state and len(state["answer"]) > 0:
-        # Get last 5 conversations
-        prev_questions, prev_answers = get_last_n_conversations(messages[:-1], state["answer"], 5)
-
-        # Add them to context
-        for i in range(len(prev_questions)):
-            if i < len(prev_answers):
-                context_messages.append(HumanMessage(content=prev_questions[i].content))
-                context_messages.append(AIMessage(content=prev_answers[i].content))
+    # Build context
+    context_messages = [
+        SystemMessage(content="You are an AI assistant. Answer based on the SQL query and result.")
+    ]
+    context_messages.extend(recent_messages)
     
-    # Add the current question with SQL context
-    current_task_message = (
-        f"Please answer the following question: \"{current_question}\"\n"
-        f"To help you, here is the SQL query that was executed: \"{state['query']}\"\n"
-        f"And this is the result from the database: \"{state['result']}\""
-    )
-    context_messages.append(HumanMessage(content=current_task_message))
+    # Add current task
+    current_task = f"""
+    Question: {latest_message}
+    SQL Query: {state['query']}
+    Result: {state['result']}
+    
+    Please provide a clear answer based on this information.
+    """
+    context_messages.append(HumanMessage(content=current_task))
     
     response = llm.invoke(context_messages)
-    return {"answer": response.content}
+    
+    # Save to memory
+    memory_service.save_conversation(thread_id, latest_message, response.content, "sql")
+    
+    return {
+        "answer": response.content,
+        "messages": [AIMessage(content=response.content)]
+    }
 
 def generate_vector_answer(state: State):
-    """Answer question using RAG with previous context (last 5 only)."""
-    # Get current question
-    messages = state["question"]
-    current_question = messages[-1].content if messages else ""
+    """Generate vector answer with chat history context."""
+    messages = state["messages"]
+    latest_message = messages[-1].content if messages else ""
+    thread_id = state.get("thread_id", "")
     
-    # Build chat history from last 5 Q&A pairs only
-    chat_history_messages = []
-    if len(messages) > 1 and "answer" in state and len(state["answer"]) > 0:
-        # Get last 5 conversations
-        prev_questions, prev_answers = get_last_n_conversations(messages[:-1], state["answer"], 5)
-        
-        # Add them to chat history
-        for i in range(len(prev_questions)):
-            if i < len(prev_answers):
-                chat_history_messages.append(HumanMessage(content=prev_questions[i].content))
-                chat_history_messages.append(AIMessage(content=prev_answers[i].content))
+    # Get chat history for context
+    chat_history = messages[-6:] if len(messages) > 6 else messages
 
+    # Perform vector search - LLM responses automatically cached by Redis
     retriever = vectorstore.as_retriever(
-        search_type="mmr",  # Maximum Marginal Relevance - balances relevance with diversity
+        search_type="mmr",
         search_kwargs={
-            "k": 10,        # Number of documents to retrieve
-            "fetch_k": 20,  # Fetch more docs initially for filtering
-            "lambda_mult": 0.7,  # 0 = max diversity, 1 = max relevance
+            "k": 10,
+            "fetch_k": 20,
+            "lambda_mult": 0.7,
         }
     )
 
-    docs = vectorstore.similarity_search(current_question, k=20)
+    docs = vectorstore.similarity_search(latest_message, k=20)
     
     bm25_retriever = BM25Retriever.from_documents(docs)
     bm25_retriever.k = 10 
@@ -141,54 +136,55 @@ def generate_vector_answer(state: State):
         weights=[0.3, 0.7]  
     )
 
-    rag_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", vectordb_prompt),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-        ])
+    rag_prompt = ChatPromptTemplate.from_messages([
+        ("system", vectordb_prompt),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{input}"),
+    ])
 
     question_answer_chain = create_stuff_documents_chain(llm, rag_prompt)
     rag_chain = create_retrieval_chain(hybrid_retriever, question_answer_chain)
+    
     result = rag_chain.invoke({
-        "input": current_question,
-        "chat_history": chat_history_messages
+        "input": latest_message,
+        "chat_history": chat_history
     })
-    return {"answer": result["answer"]}
+    
+    answer = result["answer"]
+    memory_service.save_conversation(thread_id, latest_message, answer, "vector")
+    
+    return {
+        "answer": answer,
+        "messages": [AIMessage(content=answer)]
+    }
 
 def generate_general_answer(state: State):
-    """Generate conversational responses based on last 5 conversations only."""
-    # Start with a system message
-    messages = [SystemMessage(content="""You are a helpful assistant. Answer the user's question based on the conversation history and context.
+    """Generate general answer with conversation context."""
+    messages = state["messages"]
+    latest_message = messages[-1].content if messages else ""
+    thread_id = state.get("thread_id", "")
     
-    Important guidelines:
-    - If you receive a question that is related to movies metadata (like directors, cast, release dates, ratings, etc.), say that you don't know the answer.
-    - For general conversational questions, provide helpful and natural responses.
-    - Use the conversation history to maintain context and provide coherent responses.""")]
-
-    # Add only last 5 Q&A pairs to build conversation context
-    question_messages = state["question"]
-    answer_messages = state.get("answer", [])
+    # Get conversation context
+    recent_messages = messages[-8:] if len(messages) > 8 else messages
     
-    # Build last 7 Q&A history for context
-    if len(question_messages) > 1 and len(answer_messages) > 0:
-        # Get last 7 conversations (excluding current question)
-        prev_questions, prev_answers = get_last_n_conversations(question_messages[:-1], answer_messages, 5)
+    context_messages = [
+        SystemMessage(content="""You are a helpful assistant. Answer based on conversation history.
         
-        # Add them to context
-        for i in range(len(prev_questions)):
-            if i < len(prev_answers):
-                messages.append(HumanMessage(content=prev_questions[i].content))
-                messages.append(AIMessage(content=prev_answers[i].content))
+        Guidelines:
+        - For movie-related questions, say you don't know the answer.
+        - For general questions, provide helpful responses.
+        - Use conversation history for context.""")
+    ]
+    context_messages.extend(recent_messages)
+    context_messages.append(HumanMessage(content=latest_message))
     
-    # Add the current question
-    current_question = question_messages[-1].content if question_messages else ""
-    messages.append(HumanMessage(content=current_question))
+    response = llm.invoke(context_messages)
+    memory_service.save_conversation(thread_id, latest_message, response.content, "general")
     
-    # print(f"Using last {(len(messages)-2)//2} conversations for context")  # -2 for system message and current question
-    
-    response = llm.invoke(messages)
-    return {"answer": response.content}
+    return {
+        "answer": response.content,
+        "messages": [AIMessage(content=response.content)]
+    }
 
 # Graph Builder Function
 def build_graph():

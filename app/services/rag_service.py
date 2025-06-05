@@ -1,97 +1,163 @@
-from typing import Dict, Any
 import logging
-from langgraph.checkpoint.mongodb import MongoDBSaver
+from typing import Dict
 from ..utils.nodes import build_graph
-from ..core.config import settings
-from langchain_core.messages import HumanMessage
-from ..models.chat import ChatRequest, ChatResponse
+from langchain_core.messages import HumanMessage, AIMessage
+from ..schemas.chat import ChatRequest, ChatResponse
+from .redis_checkpointer import redis_checkpointer
+from .redis_cache_service import redis_cache_service
+from .memory_service import memory_service
 
 logger = logging.getLogger(__name__)
 
 class RAGService:
     def __init__(self):
-        self.graph_builder = build_graph()
         self.graph = None
-        self.checkpointer = None
-        self._mongodb_context = None
-        
-    def initialize_graph(self):
-        """Initialize graph with MongoDB checkpointer."""
-        if not settings.MONGODB_URL:
-            raise ValueError("MONGODB_URL is required but not set in environment variables")
-        
-        try:
-            # Use context manager for MongoDB checkpointer
-            self._mongodb_context = MongoDBSaver.from_conn_string(settings.MONGODB_URL)
-            self.checkpointer = self._mongodb_context.__enter__()
-            self.graph = self.graph_builder.compile(checkpointer=self.checkpointer)
-            logger.info("Graph initialized with MongoDB checkpointer")
-        except Exception as e:
-            error_msg = f"Failed to initialize graph with MongoDB checkpointer: {e}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
-    
-    def get_graph(self):
-        """Get the graph instance, initializing if necessary."""
-        if self.graph is None:
-            self.initialize_graph()
-        return self.graph
-    
-    def close(self):
-        """Clean up resources."""
-        try:
-            if self._mongodb_context:
-                self._mongodb_context.__exit__(None, None, None)
-                self._mongodb_context = None
-            elif self.checkpointer and hasattr(self.checkpointer, 'close'):
-                self.checkpointer.close()
-        except Exception as e:
-            logger.error(f"Error closing checkpointer: {e}")
-        finally:
-            self.checkpointer = None
-            self.graph = None
-    
-    def process_question(self, request: "ChatRequest") -> "ChatResponse":
-        """Process a question through the RAG pipeline."""
-        # Import at runtime to avoid circular imports
-        
-        config = {"configurable": {"thread_id": request.thread_id}}
-        
-        final_answer = None
-        route = None
-        
-        try:
-            # Convert string question to HumanMessage
-            question_message = HumanMessage(content=request.question)
-            
-            # Get the graph
-            graph = self.get_graph()
-            
-            for step in graph.stream(
-                {"question": [question_message]}, 
-                config=config, 
-                stream_mode="updates"
-            ):
-                if "generate_vector_answer" in step:
-                    final_answer = step["generate_vector_answer"]["answer"]
-                    route = "vector"
-                elif "generate_sql_answer" in step:
-                    final_answer = step["generate_sql_answer"]["answer"]
-                    route = "sql"
-                elif "generate_general_answer" in step:
-                    final_answer = step["generate_general_answer"]["answer"]
-                    route = "general"
-            
-            if final_answer:
-                return ChatResponse(answer=final_answer, route=route)
-            else:
-                return ChatResponse(answer="Sorry, I couldn't process your question.")
-                
-        except Exception as e:
-            logger.error(f"Error in RAG processing: {e}")
-            import traceback
-            traceback.print_exc()
-            return ChatResponse(answer=f"Error processing question: {str(e)}")
+        self._graph_initialized = False
 
-# Global RAG service instance
+        redis_cache_service.initialize_llm_cache()
+        self._initialize_graph()
+        
+    def _initialize_graph(self):
+        """Initialize graph with Redis checkpointer."""
+        if self._graph_initialized:
+            return
+            
+        try:
+            checkpointer = redis_checkpointer.get_checkpointer()
+            self.graph = build_graph().compile(checkpointer=checkpointer)
+            self._graph_initialized = True
+            logger.info("Graph initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Graph initialization failed: {e}")
+            self._graph_initialized = False
+            raise RuntimeError(f"Cannot initialize RAG service: {e}") from e
+    
+    def process_question(self, request: ChatRequest) -> ChatResponse:
+        """Process question through RAG pipeline."""
+        try:
+            if not self._graph_initialized:
+                raise RuntimeError("Graph not initialized")
+            
+            config = {"configurable": {"thread_id": request.thread_id}}
+            current_state = self.graph.get_state(config)
+            
+            if current_state and current_state.values.get("messages"):
+                graph_input = {
+                    "messages": [HumanMessage(content=request.question)],
+                    "thread_id": request.thread_id
+                }
+            else:
+                chat_history = memory_service.get_messages_for_langchain(request.thread_id)[-10:]
+                all_messages = chat_history + [HumanMessage(content=request.question)]
+                graph_input = {
+                    "messages": all_messages,
+                    "thread_id": request.thread_id
+                }
+            
+            result = self.graph.invoke(graph_input, config=config)
+            
+            answer = result.get("answer", "Sorry, I couldn't process your question.")
+            route = result.get("route", "unknown")
+            
+            if not answer and result.get("messages"):
+                ai_messages = [msg for msg in result["messages"] if isinstance(msg, AIMessage)]
+                if ai_messages:
+                    answer = ai_messages[-1].content
+            
+            return ChatResponse(answer=answer, route=route)
+            
+        except RuntimeError as e:
+            logger.error(f"Service unavailable: {e}")
+            return ChatResponse(
+                answer="Service temporarily unavailable. Please try again.",
+                route="error"
+            )
+        except Exception as e:
+            logger.error(f"Error processing question: {e}")
+            return ChatResponse(
+                answer="Sorry, something went wrong. Please try again.",
+                route="error"
+            )
+    
+    def get_conversation_state(self, thread_id: str) -> dict:
+        """Get conversation state from Redis."""
+        try:
+            if not self._graph_initialized:
+                raise RuntimeError("Graph not initialized")
+            
+            config = {"configurable": {"thread_id": thread_id}}
+            state = self.graph.get_state(config)
+            return state.values if state else {}
+            
+        except Exception as e:
+            logger.error(f"Error getting state: {e}")
+            raise RuntimeError(f"Cannot retrieve conversation state: {e}") from e
+    
+    def clear_conversation_state(self, thread_id: str) -> bool:
+        """Clear conversation state."""
+        try:
+            if not self._graph_initialized:
+                raise RuntimeError("Graph not initialized")
+            
+            config = {"configurable": {"thread_id": thread_id}}
+            current_state = self.graph.get_state(config)
+            redis_cleared = False
+            
+            if current_state:
+                checkpointer = redis_checkpointer.get_checkpointer()
+                if hasattr(checkpointer, 'delete'):
+                    checkpointer.delete(config)
+                    redis_cleared = True
+            
+            mongo_cleared = memory_service.clear_session_history(thread_id)
+            return redis_cleared or mongo_cleared
+            
+        except Exception as e:
+            logger.error(f"Error clearing state: {e}")
+            return False
+    
+    def get_session_info(self, thread_id: str) -> dict:
+        """Get session information."""
+        try:
+            summary = memory_service.get_session_summary(thread_id)
+            state = self.get_conversation_state(thread_id)
+            
+            return {
+                "thread_id": thread_id,
+                "message_count": summary.get("message_count", 0),
+                "last_activity": summary.get("last_activity"),
+                "has_state": bool(state)
+            }
+        except Exception as e:
+            logger.error(f"Error getting session info: {e}")
+            return {"thread_id": thread_id, "error": str(e)}
+
+    def health_check(self) -> dict:
+        """Check service health."""
+        try:
+            redis_checkpointer.get_checkpointer()
+            
+            if not self._graph_initialized:
+                raise RuntimeError("Graph not initialized")
+
+            cache_stats = redis_cache_service.get_cache_stats()
+
+            return {
+                "status": "healthy",
+                "redis_connected": True,
+                "graph_initialized": True,
+                "llm_cache": cache_stats
+            }
+            
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return {
+                "status": "unhealthy",
+                "redis_connected": False,
+                "graph_initialized": self._graph_initialized,
+                "error": str(e)
+            }
+
+# Global service instance
 rag_service = RAGService()

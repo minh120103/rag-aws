@@ -4,18 +4,49 @@ import uvicorn
 import sys
 import os
 import logging
+from contextlib import asynccontextmanager
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.api.routes import router
+from app.services.redis_checkpointer import redis_checkpointer
+from app.services.redis_cache_service import redis_cache_service
 from app.services.rag_service import rag_service
-from app.core.config import settings
+
 
 logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage application lifespan with Redis validation."""
+    # Startup
+    logger.info("Starting RAG Movie Assistant API")
+    
+    try:
+        # Initialize Redis cache early
+        redis_cache_service.initialize_llm_cache()
+
+        health = rag_service.health_check()
+        if health["status"] == "healthy":
+            logger.info("Service startup completed successfully")
+        else:
+            logger.warning("Service starting with degraded functionality")
+
+    except Exception as e:
+        logger.warning(f"Startup health check failed: {e}")
+
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down RAG Movie Assistant API")
+
+    redis_checkpointer.close()
 
 # Initialize FastAPI app with lifespan
 app = FastAPI(
     title="RAG Movie Assistant",
-    description="A RAG-based movie information assistant with SQL and Vector search capabilities",
-    version="1.0.0")
+    description="A RAG-based movie information assistant with Redis state persistence",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 # Add CORS middleware
 app.add_middleware(
@@ -40,7 +71,8 @@ async def root():
 
 @app.get("/health")
 def health_check():
-    return {"status": "healthy"}
+    """Health check endpoint including Redis status."""
+    return rag_service.health_check()
 
 if __name__ == "__main__":
     """Run the FastAPI server."""

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from ..services.rag_service import rag_service
-from ..models.chat import ChatRequest, ChatResponse
+from ..schemas.chat import ChatRequest, ChatResponse
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,3 +26,16 @@ async def get_info():
         "version": "1.0.0",
         "description": "A RAG-based movie information assistant with SQL and Vector search capabilities"
     }
+
+
+@router.delete("/conversation/{thread_id}/state")
+def clear_conversation_state(thread_id: str):
+    """Clear conversation state for a specific thread."""
+    try:
+        success = rag_service.clear_conversation_state(thread_id)
+        return {
+            "success": success,
+            "message": f"Conversation state cleared for thread {thread_id}" if success else "No state found to clear"
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}

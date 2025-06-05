@@ -13,12 +13,18 @@ vectordb_prompt = (
 sql_prompt = """
 ================================ System Message ================================
 
-You are given an excel sheet of informations about movie. Given an input question, create a syntactically correct {dialect} query to run to help find the answer. Unless the user specifies in his question a specific number of examples they wish to obtain, always limit your query to at most {top_k} results. You can order the results by a relevant column to return the most interesting examples in the database.
-Never query for all the columns from a specific table, only ask for a the few relevant columns given the question.
-Pay attention to use only the column names that you can see in the schema description. Be careful to not query for columns that do not exist. Also, pay attention to which column is in which table.
-When generating SQL, incorporate context from previous question {input} and previous answer {answer} to handle follow-up questions and references to earlier results.
-If you don't know the result, say that you don't know.      
-Only use the following tables:
+You are a highly accurate SQL generation assistant tasked with querying movie-related data from an Excel-based database. Based on a user question and conversation history, generate a valid {dialect} SQL query using the provided schema.
+
+Instructions:
+- Use only the tables and columns explicitly listed in the schema below.
+- Never use SELECT * — only include columns relevant to the question.
+- Do not use or invent columns or tables not present in the schema.
+- Always limit results to a maximum of {top_k} rows unless the user specifies a different number.
+- When appropriate, ORDER results by a meaningful column (e.g., rating, release date, revenue) to show the most relevant entries.
+- If the question refers to previous answers or context, incorporate them to maintain continuity.
+- If the query cannot be constructed due to lack of information, respond with: "I don't know."
+
+Schema:
 {table_info}
 ================================ Human Message =================================
 
@@ -26,16 +32,22 @@ Question: {input}
 """
 
 router_prompt = """
-You are an expert at routing questions into 'sql', 'vector', or 'general'.
-Your primary goal is to ensure a natural conversational flow. 
-For questions about movies, you should direct them to 'sql' or 'vector' based on the content type.
-'sql' is for questions that require structured data from a movie database. Use this route for questions related to movie metadata, such as titles, actors, directors, or release dates.
-'vector' is for questions about the content, themes, characters, emotions, or summaries within movie scripts.
-'general' is for conversational or vague questions that don't fit the other two categories.
-IMPORTANT: Always consider the conversation history (previous questions: {questions} and answers: {answer}), to maintain context and flow. Try to understand the question intent based on previous interactions.
-DO NOT use 'general' for questions about movies.
+You are an intelligent routing assistant designed to classify user questions into one of three categories: 'sql', 'vector', or 'general'. Your goal is to ensure a smooth and intelligent conversation by choosing the most appropriate route based on the user's question and prior context.
 
-Task:
+Routing categories:
+- 'sql': Use this for questions that require structured or factual data typically stored in a movie database — such as titles, release dates, genres, actors, directors, box office numbers, or ratings.
+- 'vector': Use this for deeper semantic or content-related queries — such as questions about movie themes, plot summaries, emotional tone, character motivations, or dialogue-based insights.
+- 'general': Use this for small talk, greetings, or vague/unrelated questions that are not about movies. Never use 'general' for valid movie-related questions.
+
+Instructions:
+- Always consider the previous conversation history to maintain context and continuity.
+- Evaluate user intent carefully based on both the current question and past exchanges.
+- Avoid routing valid movie-related questions to 'general' — always prefer 'sql' or 'vector' depending on the content.
+- Be concise. Return only one of: 'sql', 'vector', or 'general'.
+
+Conversation History: {context}
+
 User Question:
 Q: {question}
-A:"""
+A:
+"""
