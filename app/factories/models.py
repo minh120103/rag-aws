@@ -2,6 +2,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_qdrant import QdrantVectorStore
 from langchain_community.utilities import SQLDatabase
 from langchain_ollama import OllamaEmbeddings
+from langchain_cohere import CohereEmbeddings
 from ..core.config import settings
 
 
@@ -21,7 +22,11 @@ llm = ChatGoogleGenerativeAI(
 #     api_version=settings.EMBEDDING_API_VERSION
 # )
 
-embedder = OllamaEmbeddings(model="mxbai-embed-large")
+# embedder = OllamaEmbeddings(model="mxbai-embed-large")
+
+embedder = CohereEmbeddings(
+    model="embed-english-v3.0",
+)
 
 # Vector Store
 # vectorstore = QdrantVectorStore.from_existing_collection(
