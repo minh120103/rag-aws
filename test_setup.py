@@ -134,19 +134,6 @@ def test_services():
         print(f"❌ Services test failed: {e}")
         return False
 
-def test_frontend():
-    """Test frontend availability."""
-    try:
-        frontend_path = os.path.join("app", "static", "frontend.py")
-        if os.path.exists(frontend_path):
-            print("✅ Streamlit frontend found")
-        else:
-            print("⚠️  Streamlit frontend not found")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Frontend test failed: {e}")
-        return False
 
 if __name__ == "__main__":
     print("🧪 Running comprehensive tests for RAG Movie Assistant\n")
@@ -167,10 +154,7 @@ if __name__ == "__main__":
     
     print("\n5. Testing services...")
     success &= test_services()
-    
-    print("\n6. Testing frontend...")
-    success &= test_frontend()
-    
+
     print(f"\n{'✅ All tests passed!' if success else '❌ Some tests failed!'}")
     
     if not success:
@@ -185,7 +169,5 @@ if __name__ == "__main__":
         print("Next steps:")
         print("1. Start the backend: python app/main.py")
         print("2. Start the frontend: streamlit run app/static/frontend.py")
-        print("3. Visit: http://localhost:8000/docs for API docs")
-        print("4. Visit: http://localhost:8501 for the Streamlit UI")
-    
+        print("3. Visit: http://localhost:8000/docs for API docs")    
     sys.exit(0 if success else 1)

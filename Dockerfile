@@ -5,6 +5,7 @@ ENV PYTHONPATH=/code
 WORKDIR /code
 
 EXPOSE 8000
+#Expose port 8000 for local development, port 80 for deploying on AWS EC2
 
 COPY ./requirements.txt /code/requirements.txt
 

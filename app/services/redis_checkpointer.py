@@ -37,9 +37,14 @@ class RedisCheckpointer:
             # Build connection string
             self._connection_string = self._build_connection_string()
             
-            # Initialize checkpointer with proper setup
+            # Initialize checkpointer with proper 
+            ttl_config = {
+                "default_ttl": 720,     # Default TTL in minutes
+                "refresh_on_read": True,  # Refresh TTL when checkpoint is read
+                }
+
             checkpointer = None
-            with RedisSaver.from_conn_string(self._connection_string) as _checkpointer:
+            with RedisSaver.from_conn_string(self._connection_string, ttl=ttl_config) as _checkpointer:
                 _checkpointer.setup()
                 checkpointer = _checkpointer
             
